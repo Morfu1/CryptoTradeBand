@@ -1,0 +1,15 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "blofin>=0.5.0",
+    "ccxt>=4.4.59",
+    "flask-login>=0.6.3",
+    "flask-wtf>=1.2.2",
+    "numpy>=2.2.3",
+    "pandas>=2.2.3",
+    "trafilatura>=2.0.0",
+    "twilio>=9.4.5",
+]
