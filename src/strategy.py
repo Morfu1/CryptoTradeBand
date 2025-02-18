@@ -56,11 +56,12 @@ class TradingStrategy:
             previous_upper = self.df['upper_band'].iloc[-2]
             previous_lower = self.df['lower_band'].iloc[-2]
 
-            # Check if price was inside bands and just closed outside
-            price_was_inside = (
-                previous_close <= previous_upper and 
-                previous_close >= previous_lower
-            )
+            # Log current band values
+            logger.info(f"Current Band Values:")
+            logger.info(f"- Upper Band: {current_upper:.6f}")
+            logger.info(f"- Lower Band: {current_lower:.6f}")
+            logger.info(f"- Current Price: {current_close:.6f}")
+            logger.info(f"- Band Width: {(current_upper - current_lower):.6f}")
 
             # Reset signal if price returns inside bands
             if current_close <= current_upper and current_close >= current_lower:
@@ -70,23 +71,22 @@ class TradingStrategy:
                     self.last_signal = None
                 return None, 0.0
 
-            # Only generate signal on first candle that closes outside
-            if not self.outside_bands and price_was_inside:
+            # Generate signal only when price closes outside bands for the first time
+            if not self.outside_bands:
                 if current_close > current_upper:
                     self.outside_bands = True
-                    self.last_signal = 'short'
-                    logger.info(f"Short signal generated at {current_close} (first close above bands)")
-                    return 'short', current_close
+                    self.last_signal = 'long'
+                    logger.info(f"Long signal generated at {current_close} (closed above upper band)")
+                    return 'long', current_close
                 elif current_close < current_lower:
                     self.outside_bands = True
-                    self.last_signal = 'long'
-                    logger.info(f"Long signal generated at {current_close} (first close below bands)")
-                    return 'long', current_close
+                    self.last_signal = 'short'
+                    logger.info(f"Short signal generated at {current_close} (closed below lower band)")
+                    return 'short', current_close
 
-            # No new signal if already outside bands
-            if self.outside_bands:
-                logger.debug(f"Price still outside bands, maintaining {self.last_signal} signal")
-                return None, 0.0
+            # No signal if we missed the first candle outside bands
+            logger.debug("No signal - waiting for price to return inside bands")
+            return None, 0.0
 
             return None, 0.0
         except Exception as e:

@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 
+
 @dataclass
 class TradingConfig:
     # Trading parameters
@@ -10,7 +11,7 @@ class TradingConfig:
     BASE_MARGIN: float = 100  # USD
     TP_PERCENTAGE: float = 0.03  # 3%
     RISK_PER_TRADE: float = 0.01  # 1% of balance
-    SYMBOL: str = 'ETH-USDT'  # Changed from ETH/USDT:USDT to ETH-USDT
+    SYMBOL: str = 'XRP-USDT'  # Changed from ETH/USDT:USDT to ETH-USDT
 
     # API credentials
     API_KEY: str = os.getenv('BLOFIN_KEY', 'demo_key')
@@ -25,5 +26,6 @@ class TradingConfig:
     # System settings
     MAX_RETRIES: int = 3
     RETRY_DELAY: int = 2  # seconds
+
 
 config = TradingConfig()

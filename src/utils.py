@@ -27,7 +27,9 @@ def retry_on_error(max_retries: Optional[int] = None, delay: Optional[int] = Non
 def calculate_contract_size(entry_price: float, margin: Optional[float] = None) -> float:
     """Calculate the contract size based on margin and entry price"""
     margin = margin or config.BASE_MARGIN
-    return margin / entry_price
+    position_value = margin * config.LEVERAGE
+    raw_size = position_value / entry_price
+    return int(raw_size / 100)  # Round to 0.1 precision
 
 def format_price(price: float) -> str:
     """Format price to string with appropriate precision"""

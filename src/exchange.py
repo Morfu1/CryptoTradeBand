@@ -1,11 +1,16 @@
 import ccxt
 import pandas as pd
 import time
-from typing import Dict, List
+import json
+import websockets
+import asyncio
+from typing import Dict, List, Callable
 from .config import config
 from .logger import logger
 
+
 class BloFinExchange:
+
     def __init__(self):
         self.logger = logger
         self.MAX_RETRIES = config.MAX_RETRIES
@@ -30,11 +35,9 @@ class BloFinExchange:
             exchange.set_sandbox_mode(True)  # Use demo account
 
             # Set leverage (supported by CCXT)
-            self._handle_request(
-                exchange.setLeverage,
-                config.LEVERAGE,
-                symbol=config.SYMBOL
-            )
+            self._handle_request(exchange.setLeverage,
+                                 config.LEVERAGE,
+                                 symbol=config.SYMBOL)
 
             return exchange
         except Exception as e:
@@ -49,12 +52,16 @@ class BloFinExchange:
             except ccxt.NetworkError as e:
                 if attempt == self.MAX_RETRIES - 1:
                     raise
-                logger.warning(f"Network error, retrying... ({attempt + 1}/{self.MAX_RETRIES})")
+                logger.warning(
+                    f"Network error, retrying... ({attempt + 1}/{self.MAX_RETRIES})"
+                )
                 time.sleep(self.RETRY_DELAY)
             except ccxt.ExchangeError as e:
                 if attempt == self.MAX_RETRIES - 1:
                     raise
-                logger.warning(f"Exchange error, retrying... ({attempt + 1}/{self.MAX_RETRIES})")
+                logger.warning(
+                    f"Exchange error, retrying... ({attempt + 1}/{self.MAX_RETRIES})"
+                )
                 time.sleep(self.RETRY_DELAY)
 
     def _get_instrument_id(self) -> str:
@@ -66,30 +73,29 @@ class BloFinExchange:
         """Fetch historical candlesticks"""
         try:
             timeframe_map = {
-                '1m': '1m', '5m': '5m', '15m': '15m',
-                '30m': '30m', '1h': '1H', '4h': '4H',
+                '1m': '1m',
+                '5m': '5m',
+                '15m': '15m',
+                '30m': '30m',
+                '1h': '1H',
+                '4h': '4H',
                 '1d': '1D'
             }
             timeframe = timeframe_map.get(config.TIMEFRAME, '5m')
 
-            ohlcv = self._handle_request(
-                self.exchange.fetch_ohlcv,
-                config.SYMBOL,
-                timeframe,
-                limit=limit
-            )
+            ohlcv = self._handle_request(self.exchange.fetch_ohlcv,
+                                         config.SYMBOL,
+                                         timeframe,
+                                         limit=limit)
 
-            candles = [
-                {
-                    'timestamp': candle[0],
-                    'open': candle[1],
-                    'high': candle[2],
-                    'low': candle[3],
-                    'close': candle[4],
-                    'volume': candle[5]
-                }
-                for candle in ohlcv
-            ]
+            candles = [{
+                'timestamp': candle[0],
+                'open': candle[1],
+                'high': candle[2],
+                'low': candle[3],
+                'close': candle[4],
+                'volume': candle[5]
+            } for candle in ohlcv]
 
             logger.info(f"Retrieved {len(candles)} candlesticks")
             return candles
@@ -109,35 +115,48 @@ class BloFinExchange:
             raise
 
     def place_order(self, direction: str, size: float, entry_price: float,
-                   stop_loss: float, take_profit: float) -> Dict:
+                    stop_loss: float, take_profit: float) -> Dict:
         """Place a new order with TP and SL"""
         try:
             # Convert direction to side
             side = "buy" if direction == "long" else "sell"
 
-            # Calculate contracts needed for target margin
-            contract_value = self.CONTRACT_VALUE  # Each contract is 0.1 ETH
-            position_value = config.BASE_MARGIN * config.LEVERAGE  # e.g., 100 * 3 = 300 USDT
-            eth_amount = position_value / entry_price  # Amount in ETH
-            target_contracts = round(eth_amount / contract_value) * 10  # Multiply by 10 to get to ~100 USD margin
+            from .utils import calculate_contract_size
+            
+            # Use configured base margin
+            margin = config.BASE_MARGIN  # From config
+            contracts = calculate_contract_size(entry_price, margin)
 
-            # Ensure at least 1 contract
-            contracts = max(1, target_contracts)
+            # Recalculate actual position value and margin used
+            actual_position_value = contracts * entry_price
+            actual_margin = actual_position_value / config.LEVERAGE
 
-            # Calculate actual margin and position size
-            actual_size = contracts * contract_value  # Size in ETH
-            position_value = actual_size * entry_price  # Value in USDT
-            actual_margin = position_value / config.LEVERAGE
+            # Ensure we don't exceed margin limit
+            if actual_margin > 100:
+                contracts = int(config.LEVERAGE / entry_price) / 10
+
+            # Extract symbol base (e.g., 'XRP' from 'XRP-USDT')
+            symbol_base = config.SYMBOL.split('-')[0]
+
+            logger.info(f"Position calculation:")
+            logger.info(f"- Margin: {margin} USDT")
+            logger.info(f"- Leverage: {config.LEVERAGE}x")
+            logger.info(f"- Total value: {actual_position_value*100} USDT")
+            logger.info(f"- Entry price: {entry_price}")
+            logger.info(f"- Position size: {contracts} {symbol_base}")
+
+            # Calculate actual margin and position value based on contracts
+            actual_position_value = contracts * entry_price  # Value in USDT
+            actual_margin = actual_position_value / config.LEVERAGE
 
             # Log detailed position calculations
             logger.info(f"Position size calculation:")
             logger.info(f"- Entry price: {entry_price:.2f} USDT")
-            logger.info(f"- Contract value: {contract_value} ETH")
-            logger.info(f"- Target position value: {position_value:.2f} USDT")
-            logger.info(f"- Target ETH amount: {eth_amount:.4f}")
+            logger.info(
+                f"- Target position value: {actual_position_value*100:.2f} USDT")
             logger.info(f"- Selected contracts: {contracts}")
             logger.info(f"- Actual margin: {actual_margin:.2f} USDT")
-            logger.info(f"- Position value: {position_value:.2f} USDT")
+            logger.info(f"- Position value: {actual_position_value:.2f} USDT")
 
             # Log SL/TP distances for verification
             sl_distance = abs(entry_price - stop_loss)
@@ -146,13 +165,17 @@ class BloFinExchange:
 
             logger.info(f"Risk/Reward Analysis:")
             logger.info(f"- Entry Price: {entry_price:.2f}")
-            logger.info(f"- Stop Loss: {stop_loss:.2f} (Distance: {sl_distance:.2f})")
-            logger.info(f"- Take Profit: {take_profit:.2f} (Distance: {tp_distance:.2f})")
+            logger.info(
+                f"- Stop Loss: {stop_loss:.2f} (Distance: {sl_distance:.2f})")
+            logger.info(
+                f"- Take Profit: {take_profit:.2f} (Distance: {tp_distance:.2f})"
+            )
             logger.info(f"- R/R Ratio: 1:{rr_ratio:.2f}")
 
             # Prepare order parameters exactly as needed by Blofin API
             order_params = {
-                'instId': config.SYMBOL,  # Already in correct format (ETH-USDT)
+                'instId':
+                config.SYMBOL,  # Already in correct format (ETH-USDT)
                 'marginMode': 'isolated',
                 'side': side,
                 'size': str(contracts),  # Number of contracts
@@ -167,11 +190,11 @@ class BloFinExchange:
 
             # Place the order
             response = self._handle_request(
-                self.exchange.privatePostTradeOrder,
-                order_params
-            )
+                self.exchange.privatePostTradeOrder, order_params)
 
-            logger.info(f"Order placed successfully: {direction} {contracts} contracts")
+            logger.info(
+                f"Order placed successfully: {direction} {contracts} contracts"
+            )
             logger.info(f"Take Profit: {take_profit}, Stop Loss: {stop_loss}")
             return response
 
@@ -183,11 +206,10 @@ class BloFinExchange:
         """Get current positions"""
         try:
             response = self._handle_request(
-                self.exchange.privateGetAccountPositions
-            )
+                self.exchange.privateGetAccountPositions)
             positions = response.get('data', []) if response else []
             active_positions = [
-                pos for pos in positions 
+                pos for pos in positions
                 if float(pos.get('positions', '0')) != 0
             ]
             logger.info(f"Retrieved {len(active_positions)} open positions")
@@ -196,7 +218,8 @@ class BloFinExchange:
             logger.error(f"Failed to get positions: {str(e)}")
             return []
 
-    def add_tp_sl_to_position(self, position_id: str, stop_loss: float, take_profit: float) -> Dict:
+    def add_tp_sl_to_position(self, position_id: str, stop_loss: float,
+                              take_profit: float) -> Dict:
         """Add TP/SL to an existing position"""
         try:
             # Format order parameters according to Blofin API
@@ -214,10 +237,8 @@ class BloFinExchange:
             }
 
             # Place the TP/SL orders
-            response = self._handle_request(
-                self.exchange.create_order,
-                **order_params
-            )
+            response = self._handle_request(self.exchange.create_order,
+                                            **order_params)
 
             logger.info(f"Added TP/SL orders to position {position_id}")
             return response
@@ -246,7 +267,8 @@ class BloFinExchange:
 
                 # Prepare order parameters
                 order_params = {
-                    "instId": position.get('instId', self._get_instrument_id()),
+                    "instId": position.get('instId',
+                                           self._get_instrument_id()),
                     "marginMode": "isolated",
                     "positionSide": "net",  # Use net mode for closing
                     "side": close_side,
@@ -256,10 +278,8 @@ class BloFinExchange:
                 }
 
                 # Place the closing order
-                self._handle_request(
-                    self.exchange.privatePostTradeOrder,
-                    order_params
-                )
+                self._handle_request(self.exchange.privatePostTradeOrder,
+                                     order_params)
 
                 logger.info(f"Closed position: {size} at market price")
 
